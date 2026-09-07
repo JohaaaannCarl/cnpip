@@ -50,11 +50,11 @@ uvx cnpip
 
 `Conda` 镜像和 PyPI 镜像是两套服务，因此它使用独立的镜像表；不是每个 PyPI 镜像都能用于 Conda。
 
-## 与 chsrc 的关系
+## 相关工具推荐
 
-[chsrc](https://github.com/RubyMetric/chsrc) 是面向多个操作系统与软件生态的通用换源工具。除了 Python 工具，它还覆盖系统包管理器、容器镜像和其他语言工具等场景；当你需要统一管理多种软件的镜像配置时，可以优先考虑它。
+`cnpip` 适合为 `pip`、`uv`、`PDM`、`Poetry` 和 `Conda` 配置 Python 包管理镜像。如果你的工作还需要为系统包管理器、容器镜像或其他语言工具换源，推荐了解 [chsrc](https://github.com/RubyMetric/chsrc)：它是面向多个操作系统与软件生态的通用换源工具。
 
-`cnpip` 则专注于 `pip`、`uv`、`PDM`、`Poetry` 和 `Conda` 的配置语义、测速与恢复。两者互不依赖，也不会相互调用。若要为同一个包管理器换源，请只使用其中一个工具，避免配置互相覆盖；在 cnpip 设置后又被其他工具或人工修改时，`cnpip unset` 会保守地拒绝覆盖该修改。
+为同一个包管理器换源时，请只使用一个工具，避免配置互相覆盖；如果 cnpip 设置后的配置又被其他工具或人工修改，`cnpip unset` 会保守地拒绝覆盖该修改。
 
 ## 常用命令
 
