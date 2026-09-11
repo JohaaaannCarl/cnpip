@@ -58,7 +58,6 @@ SOURCE_ENV_VARS = {
         "UV_FIND_LINKS",
         "UV_CONFIG_FILE",
         "UV_NO_CONFIG",
-        "UV_ISOLATED",
     ),
     "pdm": (
         "PDM_PYPI_URL",
@@ -75,7 +74,6 @@ SOURCE_ENV_VARS = {
 BOOLEAN_SOURCE_ENV_VARS = {
     "PIP_NO_INDEX",
     "UV_NO_CONFIG",
-    "UV_ISOLATED",
     "PDM_IGNORE_STORED_INDEX",
 }
 FALSE_ENV_VALUES = {"0", "false", "no", "off", "n", "f"}
@@ -238,7 +236,7 @@ def get_uv_project_config_path(start=None):
     if configured:
         return Path(configured).expanduser().resolve()
     disabled = {name for name, _value in get_source_environment("uv")}
-    if "UV_NO_CONFIG" in disabled or "UV_ISOLATED" in disabled:
+    if "UV_NO_CONFIG" in disabled:
         return None
 
     current = Path(start or Path.cwd()).resolve()
@@ -261,6 +259,27 @@ def get_uv_project_config_path(start=None):
 def get_source_context_overrides(tool):
     """返回当前目录中可能覆盖或扩展用户级配置的项目设置。"""
 
+    if tool == "pdm":
+        current = Path.cwd().resolve()
+        for directory in (current, *current.parents):
+            pdm_toml = directory / "pdm.toml"
+            if pdm_toml.is_file():
+                try:
+                    content = pdm_toml.read_text(encoding="utf-8", errors="replace")
+                except OSError:
+                    content = ""
+                if re.search(r"^\s*\[+source\]+", content, re.MULTILINE):
+                    return [("PDM 项目源", str(pdm_toml))]
+            pyproject = directory / "pyproject.toml"
+            if not pyproject.is_file():
+                continue
+            try:
+                content = pyproject.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            if re.search(r"^\s*\[+tool\.pdm\.source\]+", content, re.MULTILINE):
+                return [("PDM 项目源", str(pyproject))]
+        return []
     if tool != "uv":
         return []
     if os.environ.get("UV_CONFIG_FILE", "").strip():
@@ -1233,6 +1252,13 @@ def main():
 
     if args.command == "list":
         results = list_mirrors()
+        print("\n--- 当前下载源覆盖项 ---")
+        detected = print_source_overrides("pip")
+        for tool in ("uv", "pdm", "conda"):
+            if shutil.which(tool):
+                detected = print_source_overrides(tool) or detected
+        if not detected:
+            print("未检测到环境变量或项目配置覆盖。")
         if not any(error is None for _name, _speed, _url, error in results):
             sys.exit(1)
         return
