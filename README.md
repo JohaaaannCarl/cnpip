@@ -93,6 +93,22 @@ cnpip unset --global   # 按记录恢复系统级 pip 配置
 
 Windows 商店版 Python 不能可靠地写系统级配置，建议使用 `--user`。其他 Windows 安装方式需要以管理员身份运行终端后，才能使用 `--global`。
 
+## 配置优先级与实际下载源
+
+cnpip 管理的是包管理器的持久配置。环境变量、项目配置和具体命令的参数仍可能覆盖或扩展它。`cnpip info` 会基于当前进程和当前目录列出能够识别的覆盖项；执行 `cnpip set` 后若仍有覆盖项，也会立即提示。未来执行命令时追加的参数无法预先判断。
+
+| 工具 | cnpip 配置之外需要检查的来源 |
+| --- | --- |
+| `pip` | `PIP_INDEX_URL`、`PIP_EXTRA_INDEX_URL`、`PIP_FIND_LINKS`、`PIP_NO_INDEX`、`PIP_CONFIG_FILE`，以及 requirements 文件和命令行参数 |
+| `uv` | 当前项目或父目录的 `uv.toml`／`pyproject.toml`、`UV_INDEX`、`UV_DEFAULT_INDEX`、兼容变量 `UV_INDEX_URL`／`UV_EXTRA_INDEX_URL`、`UV_CONFIG_FILE`、`UV_NO_CONFIG`，以及命令行参数 |
+| `PDM` | 项目 `pdm.toml`／`pyproject.toml` 中的 source、`PDM_PYPI_URL`、`PDM_IGNORE_STORED_INDEX` |
+| `Poetry` | 当前项目的 source 优先级，以及依赖上的 source 约束 |
+| `Conda` | 多层 condarc、当前环境配置、`CONDA_CHANNELS` 等配置环境变量，以及 `-c`／`--override-channels` |
+
+`extra-index` 不等于“主镜像缺包时才回退”。uv 会让额外索引优先于默认索引；pip 会检查所有索引和 `find-links` 位置，再选择满足要求的最佳候选。把官方源设成额外索引仍可能产生官方源请求，pip 的多索引还需要考虑 dependency confusion 风险。
+
+`uv.lock` 会记录 registry 和包文件 URL。普通 `uv lock`／`uv sync` 会检查锁文件与当前索引是否匹配，并可能重新解析；`uv sync --frozen` 不会更新锁文件，因此可能继续使用旧锁文件中的地址。pip 的 requirements 文件也可以直接包含 `--index-url`、`--extra-index-url` 或包 URL，这些设置同样独立于 cnpip 的持久配置。
+
 ## 各工具的明确配置方式
 
 ```bash

@@ -20,6 +20,9 @@ from .mirrors import MIRRORS, update_mirrors_from_remote
 from .state import ManagedFileChange, atomic_write_text, restore_managed_file
 from .integrations import (
     CONDA_MIRRORS,
+    get_conda_config_path,
+    get_conda_effective_config,
+    get_pdm_configured_mirror,
     get_pdm_mirror,
     set_conda_mirror,
     set_pdm_mirror,
@@ -35,6 +38,47 @@ MIRROR_PROBE_COUNT = 3
 MIRROR_PROBE_PROJECT = "pip"
 MIRROR_PROBE_USER_AGENT = f"cnpip/{__version__}"
 CONDA_MIRROR_PROBE_PATH = "/pkgs/main/noarch/repodata.json"
+
+# 这些设置会改变包管理器实际查询的来源，优先级通常高于 cnpip 写入的
+# 持久配置。这里只收录与下载源直接相关的设置，避免把无关环境变量当成告警。
+SOURCE_ENV_VARS = {
+    "pip": (
+        "PIP_INDEX_URL",
+        "PIP_PYPI_URL",
+        "PIP_EXTRA_INDEX_URL",
+        "PIP_FIND_LINKS",
+        "PIP_NO_INDEX",
+        "PIP_CONFIG_FILE",
+    ),
+    "uv": (
+        "UV_INDEX",
+        "UV_DEFAULT_INDEX",
+        "UV_INDEX_URL",
+        "UV_EXTRA_INDEX_URL",
+        "UV_FIND_LINKS",
+        "UV_CONFIG_FILE",
+        "UV_NO_CONFIG",
+        "UV_ISOLATED",
+    ),
+    "pdm": (
+        "PDM_PYPI_URL",
+        "PDM_IGNORE_STORED_INDEX",
+    ),
+    "conda": (
+        "CONDA_CHANNELS",
+        "CONDA_DEFAULT_CHANNELS",
+        "CONDA_CUSTOM_CHANNELS",
+        "CONDA_CUSTOM_MULTICHANNELS",
+        "CONDA_CHANNEL_ALIAS",
+    ),
+}
+BOOLEAN_SOURCE_ENV_VARS = {
+    "PIP_NO_INDEX",
+    "UV_NO_CONFIG",
+    "UV_ISOLATED",
+    "PDM_IGNORE_STORED_INDEX",
+}
+FALSE_ENV_VALUES = {"0", "false", "no", "off", "n", "f"}
 if sys.version_info < MIN_PYTHON_VERSION:
     sys.stderr.write(
         f"错误: cnpip需要 Python {MIN_PYTHON_VERSION[0]}.{MIN_PYTHON_VERSION[1]} 或更高版本。\n"
@@ -164,6 +208,109 @@ def redact_url(url):
         return "<已隐藏的无效 URL>"
 
 
+def redact_setting_value(value):
+    """隐藏一段配置值内所有 URL 中的凭据。"""
+
+    url_pattern = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://[^\s,]+")
+    return url_pattern.sub(lambda match: redact_url(match.group(0)), value)
+
+
+def get_source_environment(tool):
+    """返回会影响指定工具下载源的非空环境变量。"""
+
+    values = []
+    for name in SOURCE_ENV_VARS.get(tool, ()):
+        if name not in os.environ:
+            continue
+        value = os.environ[name].strip()
+        if not value:
+            continue
+        if name in BOOLEAN_SOURCE_ENV_VARS and value.lower() in FALSE_ENV_VALUES:
+            continue
+        values.append((name, os.environ[name]))
+    return values
+
+
+def get_uv_project_config_path(start=None):
+    """返回当前目录向上发现的 uv 项目配置；没有则返回 None。"""
+
+    configured = os.environ.get("UV_CONFIG_FILE", "").strip()
+    if configured:
+        return Path(configured).expanduser().resolve()
+    disabled = {name for name, _value in get_source_environment("uv")}
+    if "UV_NO_CONFIG" in disabled or "UV_ISOLATED" in disabled:
+        return None
+
+    current = Path(start or Path.cwd()).resolve()
+    for directory in (current, *current.parents):
+        uv_toml = directory / "uv.toml"
+        if uv_toml.is_file():
+            return uv_toml
+        pyproject = directory / "pyproject.toml"
+        if not pyproject.is_file():
+            continue
+        try:
+            content = pyproject.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        if re.search(r"^\s*\[+tool\.uv(?:\.|\])", content, re.MULTILINE):
+            return pyproject
+    return None
+
+
+def get_source_context_overrides(tool):
+    """返回当前目录中可能覆盖或扩展用户级配置的项目设置。"""
+
+    if tool != "uv":
+        return []
+    if os.environ.get("UV_CONFIG_FILE", "").strip():
+        return []
+    path = get_uv_project_config_path()
+    if path is None or path == get_uv_config_path().resolve():
+        return []
+    return [("项目配置", str(path))]
+
+
+def get_source_overrides(tool):
+    """汇总当前进程和目录中可见的下载源覆盖项。"""
+
+    return get_source_environment(tool) + get_source_context_overrides(tool)
+
+
+def format_source_status(tool, configured_source):
+    """格式化交互选择列表中的简短来源状态。"""
+
+    source = redact_url(configured_source) if configured_source else "默认"
+    overrides = get_source_overrides(tool)
+    if not overrides:
+        return f"配置源: {source}"
+    names = ", ".join(name for name, _value in overrides)
+    return f"配置源: {source}；检测到覆盖: {names}"
+
+
+def print_source_overrides(tool):
+    """输出可能使持久配置不生效的设置，返回是否发现覆盖项。"""
+
+    overrides = get_source_overrides(tool)
+    if not overrides:
+        return False
+    print("检测到可能改变实际下载源的设置:")
+    for name, value in overrides:
+        print(f"  {name}={redact_setting_value(value)}")
+    print("  提示: 后续命令行参数仍可覆盖以上设置。")
+    return True
+
+
+def print_set_override_warning(tool):
+    """设置成功后提示更高优先级的运行时或项目配置。"""
+
+    overrides = get_source_overrides(tool)
+    if not overrides:
+        return
+    names = ", ".join(name for name, _value in overrides)
+    print(f"警告: 配置已写入，但 {names} 可能使其在当前环境中不生效。")
+
+
 def is_pip_installed():
     """检查 pip 是否安装"""
     try:
@@ -284,25 +431,46 @@ def get_pip_config():
             return None, None
 
         output = result.stdout
-        index_url = None
-        trusted_host = None
+        config_index_url = None
+        command_index_url = None
+        env_index_url = None
+        config_trusted_host = None
+        command_trusted_host = None
+        env_trusted_host = None
 
         for line in output.splitlines():
             # 格式: [section].index-url='...'，前缀可能是 global/user/site/install 等
-            if ".index-url" in line:
+            is_environment = line.startswith(":env:")
+            key = line.split("=", 1)[0].strip()
+            if ".index-url" in line or (is_environment and ".pypi-url" in line):
                 parts = line.split("=", 1)
                 if len(parts) == 2:
                     val = parts[1].strip().strip("'\"")
                     if val:
-                        index_url = val
+                        if is_environment:
+                            env_index_url = val
+                        elif key == "install.index-url":
+                            command_index_url = val
+                        elif key == "global.index-url" or config_index_url is None:
+                            config_index_url = val
             elif ".trusted-host" in line:
                 parts = line.split("=", 1)
                 if len(parts) == 2:
                     val = parts[1].strip().strip("'\"")
                     if val:
-                        trusted_host = val
+                        if is_environment:
+                            env_trusted_host = val
+                        elif key == "install.trusted-host":
+                            command_trusted_host = val
+                        elif (
+                            key == "global.trusted-host" or config_trusted_host is None
+                        ):
+                            config_trusted_host = val
 
-        return index_url, trusted_host
+        return (
+            env_index_url or command_index_url or config_index_url,
+            env_trusted_host or command_trusted_host or config_trusted_host,
+        )
     except Exception:
         return None, None
 
@@ -738,9 +906,15 @@ def show_info():
     env_desc = ENV_DESCRIPTIONS.get(env_type, env_type)
     print(f"环境类型: {env_desc}")
 
-    print("\n--- 当前 Pip 配置 ---")
+    print("\n--- Pip 下载源 ---")
     index_url, trusted_host = get_pip_config()
-    print(f"当前镜像源: {redact_url(index_url) or '默认 (https://pypi.org/simple)'}")
+    if any(name == "PIP_NO_INDEX" for name, _value in get_source_environment("pip")):
+        print("当前进程预计使用的默认索引: 已禁用 (PIP_NO_INDEX)")
+    else:
+        print(
+            f"当前进程预计使用的默认索引: "
+            f"{redact_url(index_url) or '默认 (https://pypi.org/simple)'}"
+        )
     print(f"信任主机: {trusted_host or '未设置'}")
 
     # 显示实际配置文件路径
@@ -749,6 +923,7 @@ def show_info():
         print("配置文件路径:")
         for f in config_files:
             print(f"  {f}")
+    print_source_overrides("pip")
 
     # uv 信息
     print("\n--- uv 信息 ---")
@@ -771,7 +946,11 @@ def show_info():
         print(f"uv 配置文件: {uv_config_path}")
 
         uv_index = get_uv_index_url()
-        print(f"uv 镜像源: {redact_url(uv_index) or '默认 (https://pypi.org/simple)'}")
+        print(
+            f"用户级配置中的索引: "
+            f"{redact_url(uv_index) or '默认 (https://pypi.org/simple)'}"
+        )
+        print_source_overrides("uv")
     else:
         print("uv: 未安装")
 
@@ -794,9 +973,28 @@ def show_info():
         except Exception:
             print(f"{tool}: 已安装 (版本获取失败)")
         if tool == "pdm":
+            pdm_configured = get_pdm_configured_mirror()
             pdm_mirror = get_pdm_mirror()
-            if pdm_mirror:
-                print(f"pdm 镜像源: {redact_url(pdm_mirror)}")
+            print(f"pdm 持久配置源: {redact_url(pdm_configured) or '默认'}")
+            if pdm_mirror != pdm_configured:
+                print(f"pdm 当前进程预计使用的源: {redact_url(pdm_mirror) or '默认'}")
+            print_source_overrides("pdm")
+        elif tool == "conda":
+            print(f"conda 配置目标: {get_conda_config_path()}")
+            effective = get_conda_effective_config()
+            if effective:
+                for key in (
+                    "channels",
+                    "default_channels",
+                    "custom_channels",
+                    "channel_alias",
+                ):
+                    if key in effective:
+                        value = json.dumps(effective[key], ensure_ascii=False)
+                        print(f"conda {key}: {redact_setting_value(value)}")
+            else:
+                print("conda 生效配置: 无法读取")
+            print_source_overrides("conda")
 
 
 # === 交互式 set ===
@@ -807,15 +1005,20 @@ def scan_available_tools():
     tools = []
     if is_pip_installed():
         index_url, _ = get_pip_config()
-        tools.append(("pip", f"当前源: {index_url or '默认'}"))
+        tools.append(("pip", format_source_status("pip", index_url)))
     if detect_uv_binary():
-        tools.append(("uv", f"当前源: {get_uv_index_url() or '默认'}"))
+        tools.append(("uv", format_source_status("uv", get_uv_index_url())))
     if shutil.which("pdm"):
-        tools.append(("pdm", f"当前源: {get_pdm_mirror() or '默认'}"))
+        tools.append(("pdm", format_source_status("pdm", get_pdm_mirror())))
     if shutil.which("poetry") and Path("pyproject.toml").exists():
         tools.append(("poetry", "当前项目 (pyproject.toml)"))
     if shutil.which("conda"):
-        tools.append(("conda", "用户级 (~/.condarc)"))
+        conda_status = f"配置文件: {get_conda_config_path()}"
+        conda_overrides = get_source_overrides("conda")
+        if conda_overrides:
+            names = ", ".join(name for name, _value in conda_overrides)
+            conda_status += f"；检测到覆盖: {names}"
+        tools.append(("conda", conda_status))
     return tools
 
 
@@ -848,7 +1051,10 @@ def parse_tool_selection(raw, tool_names, default):
 def apply_mirror_to_tool(tool, mirror_name, mirror_url, args):
     """将镜像源应用到单个工具，返回是否成功。"""
     if tool == "pip":
-        return update_pip_config(mirror_url, get_scope_args(args) if args else [])
+        success = update_pip_config(mirror_url, get_scope_args(args) if args else [])
+        if success:
+            print_set_override_warning("pip")
+        return success
     if tool == "uv":
         success, msg = update_uv_config(mirror_url)
     elif tool == "pdm":
@@ -873,6 +1079,8 @@ def apply_mirror_to_tool(tool, mirror_name, mirror_url, args):
     else:
         return False
     print(msg)
+    if success:
+        print_set_override_warning(tool)
     return success
 
 
@@ -1066,6 +1274,8 @@ def main():
                 conda_mirror_name = args.mirror
             success, msg = set_conda_mirror(CONDA_MIRRORS[conda_mirror_name])
             print(msg)
+            if success:
+                print_set_override_warning("conda")
             sys.exit(0 if success else 1)
 
         # 解析镜像名（set/unset 共用）
@@ -1098,9 +1308,12 @@ def main():
             print(msg)
             if not success:
                 sys.exit(1)
+            print_set_override_warning("uv")
         elif args.pdm:
             success, msg = set_pdm_mirror(mirror_url)
             print(msg)
+            if success:
+                print_set_override_warning("pdm")
             sys.exit(0 if success else 1)
         elif args.poetry:
             success, msg = set_poetry_mirror(mirror_url)
@@ -1117,6 +1330,7 @@ def main():
                     print(msg)
                     if not success:
                         sys.exit(1)
+                    print_set_override_warning("uv")
                 else:
                     print("检测到 uvx 环境但未找到 uv 可执行文件，请手动配置")
                     sys.exit(1)
@@ -1125,6 +1339,7 @@ def main():
                 success = update_pip_config(mirror_url, scope_args)
                 if not success:
                     sys.exit(1)
+                print_set_override_warning("pip")
                 return
     elif args.command == "unset":
         if args.uv:
