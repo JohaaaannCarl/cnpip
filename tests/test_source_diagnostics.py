@@ -128,7 +128,7 @@ def test_pdm_toml_source_is_reported(tmp_path, monkeypatch):
     _clear_source_environment(monkeypatch)
     config = tmp_path / "pdm.toml"
     config.write_text(
-        '[[source]]\nname = "mirror"\nurl = "https://mirror.example/simple"\n',
+        '[pypi]\nurl = "https://mirror.example/simple"\n',
         encoding="utf-8",
     )
     monkeypatch.chdir(tmp_path)

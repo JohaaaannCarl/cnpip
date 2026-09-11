@@ -268,7 +268,11 @@ def get_source_context_overrides(tool):
                     content = pdm_toml.read_text(encoding="utf-8", errors="replace")
                 except OSError:
                     content = ""
-                if re.search(r"^\s*\[+source\]+", content, re.MULTILINE):
+                if re.search(
+                    r"^\s*(?:\[pypi(?:\.|\])|pypi\.[A-Za-z0-9_.-]+\s*=)",
+                    content,
+                    re.MULTILINE,
+                ):
                     return [("PDM 项目源", str(pdm_toml))]
             pyproject = directory / "pyproject.toml"
             if not pyproject.is_file():
