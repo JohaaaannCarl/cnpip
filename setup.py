@@ -9,7 +9,7 @@ QUALITY_REQUIREMENTS = [
 
 setup(
     name="cnpip",
-    version="1.6.0",
+    version="1.7.0",
     description="面向中国网络环境的 Python 包管理镜像配置命令行工具，支持 pip、uv、PDM、Poetry 和 Conda。",
     author="caoergou",
     author_email="itsericsmail@gmail.com",
