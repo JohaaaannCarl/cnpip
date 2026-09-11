@@ -50,7 +50,7 @@ class TestPdm:
         calls = []
         monkeypatch.setattr(module, "_run", fake_run_factory(calls))
         values = iter([None, MIRROR_URL])
-        monkeypatch.setattr(module, "get_pdm_mirror", lambda: next(values))
+        monkeypatch.setattr(module, "get_pdm_configured_mirror", lambda: next(values))
         success, msg = set_pdm_mirror(MIRROR_URL)
         assert success
         assert calls == [["/usr/bin/pdm", "config", "pypi.url", MIRROR_URL]]
@@ -65,7 +65,7 @@ class TestPdm:
         monkeypatch.setattr(
             module, "_run", fake_run_factory([], returncode=1, stderr="boom")
         )
-        monkeypatch.setattr(module, "get_pdm_mirror", lambda: None)
+        monkeypatch.setattr(module, "get_pdm_configured_mirror", lambda: None)
         success, msg = set_pdm_mirror(MIRROR_URL)
         assert not success
         assert "boom" in msg
@@ -74,7 +74,7 @@ class TestPdm:
         calls = []
         monkeypatch.setattr(module, "_run", fake_run_factory(calls))
         module.record_managed_value("pdm:user", None, MIRROR_URL)
-        monkeypatch.setattr(module, "get_pdm_mirror", lambda: MIRROR_URL)
+        monkeypatch.setattr(module, "get_pdm_configured_mirror", lambda: MIRROR_URL)
         success, msg = unset_pdm_mirror()
         assert success
         assert calls == [["/usr/bin/pdm", "config", "--delete", "pypi.url"]]
@@ -82,7 +82,7 @@ class TestPdm:
     def test_unset_graceful_when_not_set(self, tool_installed, monkeypatch):
         calls = []
         monkeypatch.setattr(module, "_run", fake_run_factory(calls, returncode=1))
-        monkeypatch.setattr(module, "get_pdm_mirror", lambda: None)
+        monkeypatch.setattr(module, "get_pdm_configured_mirror", lambda: None)
         success, msg = unset_pdm_mirror()
         assert success
         assert calls == []
@@ -91,7 +91,7 @@ class TestPdm:
         calls = []
         monkeypatch.setattr(module, "_run", fake_run_factory(calls))
         values = iter(["https://pypi.org/simple", MIRROR_URL, MIRROR_URL])
-        monkeypatch.setattr(module, "get_pdm_mirror", lambda: next(values))
+        monkeypatch.setattr(module, "get_pdm_configured_mirror", lambda: next(values))
 
         success, msg = set_pdm_mirror(MIRROR_URL)
         assert success, msg
@@ -106,7 +106,7 @@ class TestPdm:
         calls = []
         monkeypatch.setattr(module, "_run", fake_run_factory(calls))
         values = iter([None, "https://unexpected.example/simple"])
-        monkeypatch.setattr(module, "get_pdm_mirror", lambda: next(values))
+        monkeypatch.setattr(module, "get_pdm_configured_mirror", lambda: next(values))
 
         success, msg = set_pdm_mirror(MIRROR_URL)
         assert not success
@@ -121,7 +121,9 @@ class TestPdm:
         monkeypatch.setattr(module, "_run", fake_run_factory(calls))
         module.record_managed_value("pdm:user", None, MIRROR_URL)
         monkeypatch.setattr(
-            module, "get_pdm_mirror", lambda: "https://external.example/simple"
+            module,
+            "get_pdm_configured_mirror",
+            lambda: "https://external.example/simple",
         )
 
         success, msg = unset_pdm_mirror()

@@ -6,6 +6,7 @@
 - conda:  conda config --prepend/--set/...     （用户级 ~/.condarc）
 """
 
+import json
 import os
 import shutil
 import subprocess
@@ -43,6 +44,23 @@ def _run(cmd):
     )
 
 
+def _run_without_environment(cmd, ignored_names):
+    """执行命令，同时移除会遮蔽持久配置值的环境变量。"""
+
+    env = os.environ.copy()
+    for name in ignored_names:
+        env.pop(name, None)
+    return subprocess.run(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+        env=env,
+    )
+
+
 def _which(name, install_hint):
     """查找可执行文件，找不到返回 (None, 错误信息)。"""
     binary = shutil.which(name)
@@ -74,7 +92,7 @@ def set_pdm_mirror(mirror_url):
     pdm, err = _which("pdm", "https://pdm-project.org")
     if not pdm:
         return False, err
-    before = get_pdm_mirror()
+    before = get_pdm_configured_mirror()
     result = _run([pdm, "config", "pypi.url", mirror_url])
     if result.returncode != 0:
         rollback_ok, rollback_error = _rollback_pdm_value(pdm, before)
@@ -82,7 +100,7 @@ def set_pdm_mirror(mirror_url):
         if not rollback_ok:
             message += f"；回滚失败: {rollback_error}"
         return False, message
-    after = get_pdm_mirror()
+    after = get_pdm_configured_mirror()
     if after != mirror_url:
         rollback_ok, rollback_error = _rollback_pdm_value(pdm, before)
         message = "设置 pdm 镜像源后验证失败，已尝试回滚"
@@ -101,7 +119,7 @@ def set_pdm_mirror(mirror_url):
 
 def unset_pdm_mirror():
     """移除 pdm 用户级镜像源配置。返回 (success, message)。"""
-    current = get_pdm_mirror()
+    current = get_pdm_configured_mirror()
     success, previous, message = managed_value_to_restore("pdm:user", current)
     if not success or message:
         return success, message
@@ -128,6 +146,18 @@ def get_pdm_mirror():
     if not pdm:
         return None
     result = _run([pdm, "config", "pypi.url"])
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip() or None
+
+
+def get_pdm_configured_mirror():
+    """读取 PDM 持久配置值，不让 PDM_PYPI_URL 遮蔽该值。"""
+
+    pdm = shutil.which("pdm")
+    if not pdm:
+        return None
+    result = _run_without_environment([pdm, "config", "pypi.url"], ("PDM_PYPI_URL",))
     if result.returncode != 0:
         return None
     return result.stdout.strip() or None
@@ -274,6 +304,33 @@ def set_conda_mirror(base_url):
 def unset_conda_mirror():
     """移除 conda 镜像源配置。返回 (success, message)。"""
     return restore_managed_file("conda:user", get_conda_config_path())
+
+
+def get_conda_effective_config():
+    """通过 conda CLI 读取当前环境合并后的下载源配置。"""
+
+    conda = shutil.which("conda")
+    if not conda:
+        return None
+    result = _run(
+        [
+            conda,
+            "config",
+            "--json",
+            "--show",
+            "channels",
+            "default_channels",
+            "custom_channels",
+            "channel_alias",
+        ]
+    )
+    if result.returncode != 0:
+        return None
+    try:
+        value = json.loads(result.stdout)
+    except (TypeError, ValueError):
+        return None
+    return value if isinstance(value, dict) else None
 
 
 def get_conda_config_path():

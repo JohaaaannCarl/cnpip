@@ -13,6 +13,7 @@ from cnpip.integrations import (
     CONDA_MIRRORS,
     POETRY_SOURCE_NAME,
     get_conda_config_path,
+    get_pdm_configured_mirror,
     get_pdm_mirror,
     set_conda_mirror,
     set_pdm_mirror,
@@ -91,6 +92,24 @@ def test_pdm_cli_set_and_unset_round_trip(isolated_cli_environment):
     success, message = unset_pdm_mirror()
     assert success, message
     assert get_pdm_mirror() == before
+
+
+def test_pdm_environment_override_does_not_corrupt_persistent_state(
+    isolated_cli_environment, monkeypatch
+):
+    require_tool("pdm")
+    before = get_pdm_configured_mirror()
+    environment_url = "https://environment.invalid/simple"
+    monkeypatch.setenv("PDM_PYPI_URL", environment_url)
+
+    success, message = set_pdm_mirror(PDM_MIRROR_URL)
+    assert success, message
+    assert get_pdm_mirror() == environment_url
+    assert get_pdm_configured_mirror() == PDM_MIRROR_URL
+
+    success, message = unset_pdm_mirror()
+    assert success, message
+    assert get_pdm_configured_mirror() == before
 
 
 def test_poetry_cli_set_and_unset_restores_project(

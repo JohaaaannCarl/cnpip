@@ -93,6 +93,22 @@ cnpip unset --global   # Restore the recorded system-wide pip config
 
 Microsoft Store Python cannot reliably write system-wide configuration; use `--user`. For other Windows installations, open the terminal as Administrator before using `--global`.
 
+## Configuration precedence and the actual download source
+
+cnpip manages persistent package-manager configuration. Environment variables, project configuration, and arguments on a specific command can still override or extend it. `cnpip info` reports the overrides it can identify from the current process and working directory, and `cnpip set` warns when an override remains after writing configuration. It cannot predict arguments added to a future command.
+
+| Tool | Sources to check in addition to cnpip configuration |
+| --- | --- |
+| `pip` | `PIP_INDEX_URL`, `PIP_EXTRA_INDEX_URL`, `PIP_FIND_LINKS`, `PIP_NO_INDEX`, `PIP_CONFIG_FILE`, requirements files, and command-line arguments |
+| `uv` | `uv.toml` or `pyproject.toml` in the project hierarchy, `UV_INDEX`, `UV_DEFAULT_INDEX`, compatibility variables `UV_INDEX_URL` / `UV_EXTRA_INDEX_URL`, `UV_CONFIG_FILE`, `UV_NO_CONFIG`, and command-line arguments |
+| `PDM` | Sources in project `pdm.toml` / `pyproject.toml`, `PDM_PYPI_URL`, and `PDM_IGNORE_STORED_INDEX` |
+| `Poetry` | Source priorities in the current project and source constraints on dependencies |
+| `conda` | Merged condarc files, active-environment configuration, configuration variables such as `CONDA_CHANNELS`, and `-c` / `--override-channels` |
+
+An extra index is not necessarily a fallback used only when the primary mirror lacks a package. uv gives additional indexes priority over the default index. pip checks all indexes and `find-links` locations, then selects the best matching candidate. Configuring the official index as an extra can therefore still produce requests to it, and multiple pip indexes also carry dependency-confusion risk.
+
+`uv.lock` records registry and package-file URLs. A regular `uv lock` or `uv sync` checks whether the lock matches the configured indexes and may re-resolve it. `uv sync --frozen` does not update the lockfile and can keep using its old addresses. pip requirements files can also contain `--index-url`, `--extra-index-url`, or direct package URLs independently of persistent configuration.
+
 ## Explicit configuration by tool
 
 ```bash
